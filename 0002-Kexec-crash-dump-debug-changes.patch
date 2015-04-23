@@ -1,0 +1,803 @@
+From 8663f48b495a5ac9db639406122b759e19b00fe0 Mon Sep 17 00:00:00 2001
+From: Anurup M <anurup.m@huawei.com>
+Date: Thu, 23 Apr 2015 16:06:36 +0530
+Subject: [PATCH 2/2] Kexec crash dump debug changes
+
+---
+ arch/arm64/configs/hulk_defconfig  | 183 +++++++++++++++++++++++++++++++++++++
+ arch/arm64/include/asm/kexec.h     |   2 +
+ arch/arm64/kernel/crash_dump.c     |  14 +--
+ arch/arm64/kernel/head.S           |   3 +-
+ arch/arm64/kernel/machine_kexec.c  |  17 ++++
+ arch/arm64/kernel/process.c        |   8 +-
+ arch/arm64/kernel/setup.c          |  66 +++++--------
+ arch/arm64/kernel/smp.c            |  11 ++-
+ arch/arm64/kvm/Kconfig             |   1 +
+ arch/arm64/mm/init.c               |  21 +++++
+ arch/arm64/mm/ioremap.c            |   5 +-
+ drivers/irqchip/irq-gic-v3-its.c   |  63 ++++++++++++-
+ drivers/irqchip/irq-gic-v3.c       |  14 ++-
+ include/linux/irqchip/arm-gic-v3.h |   3 +
+ init/main.c                        |   3 +
+ kernel/kexec.c                     |   3 +
+ mm/memblock.c                      |   1 +
+ 17 files changed, 354 insertions(+), 64 deletions(-)
+ create mode 100644 arch/arm64/configs/hulk_defconfig
+
+diff --git a/arch/arm64/configs/hulk_defconfig b/arch/arm64/configs/hulk_defconfig
+new file mode 100644
+index 0000000..22ee614b
+--- /dev/null
++++ b/arch/arm64/configs/hulk_defconfig
+@@ -0,0 +1,183 @@
++# CONFIG_LOCALVERSION_AUTO is not set
++CONFIG_SYSVIPC=y
++CONFIG_POSIX_MQUEUE=y
++CONFIG_FHANDLE=y
++CONFIG_AUDIT=y
++CONFIG_NO_HZ_IDLE=y
++CONFIG_HIGH_RES_TIMERS=y
++CONFIG_BSD_PROCESS_ACCT=y
++CONFIG_BSD_PROCESS_ACCT_V3=y
++CONFIG_TASKSTATS=y
++CONFIG_TASK_DELAY_ACCT=y
++CONFIG_TASK_XACCT=y
++CONFIG_TASK_IO_ACCOUNTING=y
++CONFIG_IKCONFIG=y
++CONFIG_IKCONFIG_PROC=y
++CONFIG_LOG_BUF_SHIFT=14
++CONFIG_MEMCG=y
++CONFIG_MEMCG_SWAP=y
++CONFIG_MEMCG_KMEM=y
++CONFIG_CGROUP_HUGETLB=y
++# CONFIG_UTS_NS is not set
++# CONFIG_IPC_NS is not set
++# CONFIG_NET_NS is not set
++CONFIG_SCHED_AUTOGROUP=y
++CONFIG_BLK_DEV_INITRD=y
++CONFIG_KALLSYMS_ALL=y
++# CONFIG_COMPAT_BRK is not set
++CONFIG_PROFILING=y
++CONFIG_JUMP_LABEL=y
++CONFIG_MODULES=y
++CONFIG_MODULE_UNLOAD=y
++# CONFIG_BLK_DEV_BSG is not set
++# CONFIG_IOSCHED_DEADLINE is not set
++CONFIG_ARCH_HISI=y
++CONFIG_ARCH_THUNDER=y
++CONFIG_ARCH_VEXPRESS=y
++CONFIG_ARCH_XGENE=y
++CONFIG_PCI=y
++CONFIG_PCI_MSI=y
++CONFIG_PCI_XGENE=y
++CONFIG_SMP=y
++CONFIG_KSM=y
++CONFIG_TRANSPARENT_HUGEPAGE=y
++# CONFIG_CMA is not set
++CONFIG_CMDLINE="console=ttyAMA0"
++# CONFIG_CORE_DUMP_DEFAULT_ELF_HEADERS is not set
++CONFIG_COMPAT=y
++CONFIG_AARCH32_EL0=y
++CONFIG_NET=y
++CONFIG_PACKET=y
++CONFIG_UNIX=y
++CONFIG_INET=y
++CONFIG_IP_PNP=y
++CONFIG_IP_PNP_DHCP=y
++CONFIG_IP_PNP_BOOTP=y
++# CONFIG_INET_LRO is not set
++# CONFIG_IPV6 is not set
++CONFIG_BPF_JIT=y
++# CONFIG_WIRELESS is not set
++CONFIG_NET_9P=y
++CONFIG_NET_9P_VIRTIO=y
++CONFIG_UEVENT_HELPER_PATH="/sbin/hotplug"
++CONFIG_DEVTMPFS=y
++CONFIG_DEVTMPFS_MOUNT=y
++CONFIG_DMA_CMA=y
++CONFIG_BLK_DEV_LOOP=y
++CONFIG_VIRTIO_BLK=y
++# CONFIG_SCSI_PROC_FS is not set
++CONFIG_BLK_DEV_SD=y
++# CONFIG_SCSI_LOWLEVEL is not set
++CONFIG_ATA=y
++CONFIG_SATA_AHCI=y
++CONFIG_SATA_AHCI_PLATFORM=y
++CONFIG_AHCI_D02=y
++CONFIG_AHCI_XGENE=y
++CONFIG_PATA_PLATFORM=y
++CONFIG_PATA_OF_PLATFORM=y
++CONFIG_NETDEVICES=y
++CONFIG_TUN=y
++CONFIG_VIRTIO_NET=y
++CONFIG_NET_XGENE=y
++CONFIG_SMC91X=y
++CONFIG_SMSC911X=y
++# CONFIG_WLAN is not set
++CONFIG_INPUT_EVDEV=y
++CONFIG_KEYBOARD_GPIO=y
++# CONFIG_SERIO_SERPORT is not set
++CONFIG_SERIO_AMBAKMI=y
++CONFIG_LEGACY_PTY_COUNT=16
++CONFIG_SERIAL_8250=y
++CONFIG_SERIAL_8250_DW=y
++CONFIG_SERIAL_8250_CONSOLE=y
++CONFIG_SERIAL_AMBA_PL011=y
++CONFIG_SERIAL_AMBA_PL011_CONSOLE=y
++CONFIG_SERIAL_OF_PLATFORM=y
++CONFIG_VIRTIO_CONSOLE=y
++# CONFIG_HW_RANDOM is not set
++CONFIG_I2C=y
++CONFIG_I2C_CHARDEV=y
++CONFIG_I2C_DESIGNWARE_PLATFORM=y
++CONFIG_EEPROM_AT24=y
++CONFIG_SPI=y
++CONFIG_SPI_PL022=y
++CONFIG_GPIO_DWAPB=y
++CONFIG_GPIO_PL061=y
++CONFIG_GPIO_XGENE=y
++CONFIG_HWMON=y
++CONFIG_SENSORS_LM75=y
++CONFIG_SENSORS_LM80=y
++CONFIG_REGULATOR=y
++CONFIG_REGULATOR_FIXED_VOLTAGE=y
++CONFIG_FB=y
++CONFIG_FB_ARMCLCD=y
++CONFIG_FRAMEBUFFER_CONSOLE=y
++CONFIG_LOGO=y
++# CONFIG_LOGO_LINUX_MONO is not set
++# CONFIG_LOGO_LINUX_VGA16 is not set
++CONFIG_USB=y
++CONFIG_USB_EHCI_HCD=y
++CONFIG_USB_EHCI_HCD_PLATFORM=y
++CONFIG_USB_ISP1760_HCD=y
++CONFIG_USB_OHCI_HCD=y
++CONFIG_USB_OHCI_HCD_PLATFORM=y
++CONFIG_USB_STORAGE=y
++CONFIG_USB_ULPI=y
++CONFIG_MMC=y
++CONFIG_MMC_ARMMMCI=y
++CONFIG_MMC_SDHCI=y
++CONFIG_MMC_SDHCI_PLTFM=y
++CONFIG_MMC_SPI=y
++CONFIG_NEW_LEDS=y
++CONFIG_LEDS_CLASS=y
++CONFIG_LEDS_GPIO=y
++CONFIG_LEDS_TRIGGERS=y
++CONFIG_LEDS_TRIGGER_HEARTBEAT=y
++CONFIG_RTC_CLASS=y
++CONFIG_RTC_DRV_EFI=y
++CONFIG_RTC_DRV_DS1307=y
++CONFIG_RTC_DRV_XGENE=y
++CONFIG_VIRTIO_BALLOON=y
++CONFIG_VIRTIO_MMIO=y
++# CONFIG_IOMMU_SUPPORT is not set
++CONFIG_PHY_XGENE=y
++CONFIG_EXT2_FS=y
++CONFIG_EXT3_FS=y
++# CONFIG_EXT3_DEFAULTS_TO_ORDERED is not set
++# CONFIG_EXT3_FS_XATTR is not set
++CONFIG_EXT4_FS=y
++CONFIG_FANOTIFY=y
++CONFIG_FANOTIFY_ACCESS_PERMISSIONS=y
++CONFIG_QUOTA=y
++CONFIG_AUTOFS4_FS=y
++CONFIG_FUSE_FS=y
++CONFIG_CUSE=y
++CONFIG_VFAT_FS=y
++CONFIG_TMPFS=y
++CONFIG_HUGETLBFS=y
++# CONFIG_MISC_FILESYSTEMS is not set
++CONFIG_NFS_FS=y
++CONFIG_ROOT_NFS=y
++CONFIG_9P_FS=y
++CONFIG_NLS_CODEPAGE_437=y
++CONFIG_NLS_ISO8859_1=y
++CONFIG_VIRTUALIZATION=y
++CONFIG_KVM=y
++CONFIG_DEBUG_INFO=y
++CONFIG_DEBUG_FS=y
++CONFIG_MAGIC_SYSRQ=y
++CONFIG_DEBUG_KERNEL=y
++CONFIG_LOCKUP_DETECTOR=y
++# CONFIG_SCHED_DEBUG is not set
++# CONFIG_DEBUG_PREEMPT is not set
++# CONFIG_FTRACE is not set
++CONFIG_KEYS=y
++CONFIG_SECURITY=y
++CONFIG_CRYPTO_ANSI_CPRNG=y
++CONFIG_ARM64_CRYPTO=y
++CONFIG_CRYPTO_SHA1_ARM64_CE=y
++CONFIG_CRYPTO_SHA2_ARM64_CE=y
++CONFIG_CRYPTO_GHASH_ARM64_CE=y
++CONFIG_CRYPTO_AES_ARM64_CE_CCM=y
++CONFIG_CRYPTO_AES_ARM64_CE_BLK=y
++CONFIG_CRYPTO_AES_ARM64_NEON_BLK=y
+diff --git a/arch/arm64/include/asm/kexec.h b/arch/arm64/include/asm/kexec.h
+index 8f45fe1..16eb734 100644
+--- a/arch/arm64/include/asm/kexec.h
++++ b/arch/arm64/include/asm/kexec.h
+@@ -29,6 +29,8 @@
+ 
+ #if !defined(__ASSEMBLY__)
+ 
++extern bool in_crash_kexec;
++
+ /**
+  * crash_setup_regs() - save registers for the panic kernel
+  *
+diff --git a/arch/arm64/kernel/crash_dump.c b/arch/arm64/kernel/crash_dump.c
+index 2b3046e..62d97a1 100644
+--- a/arch/arm64/kernel/crash_dump.c
++++ b/arch/arm64/kernel/crash_dump.c
+@@ -33,23 +33,19 @@ ssize_t copy_oldmem_page(unsigned long pfn, char *buf,
+ 			 int userbuf)
+ {
+ 	void *vaddr;
++	phys_addr_t phys_addr;
+ 
+ 	if (!csize)
+ 		return 0;
+-#if 0
+-	phys_addr_t phys_addr;
+ 
+ 	phys_addr = pfn << PAGE_SHIFT;
+ 
+-    	if (0x8fff10000 <= phys_addr) {
+-		printk("Skipping address:%llx \n", phys_addr);
+-		return 0;
+-	}
+-	
+-#endif
+ 	vaddr = ioremap(pfn << PAGE_SHIFT, PAGE_SIZE);
+-	if (!vaddr)
++	if (!vaddr) {
++		printk("ioremap failed for Physical address:%llx \n", phys_addr);
++//			return 0;
+ 		return -ENOMEM;
++	}
+ 
+ 	if (userbuf) {
+ 		if (copy_to_user(buf, vaddr + offset, csize)) {
+diff --git a/arch/arm64/kernel/head.S b/arch/arm64/kernel/head.S
+index 5a7c866..5a98702 100644
+--- a/arch/arm64/kernel/head.S
++++ b/arch/arm64/kernel/head.S
+@@ -240,7 +240,8 @@ section_table:
+ #endif
+ 
+ .macro putc c:req
+-	mov	x21, 0x1c090000
++	//mov	x21, 0x1c090000
++	mov	x21, 0x80300000
+ 	mov	x22, \c
+ 	str	x22, [x21]
+ .endm
+diff --git a/arch/arm64/kernel/machine_kexec.c b/arch/arm64/kernel/machine_kexec.c
+index d4c4a11..26a8bc6 100644
+--- a/arch/arm64/kernel/machine_kexec.c
++++ b/arch/arm64/kernel/machine_kexec.c
+@@ -11,6 +11,7 @@
+ #define DEBUG 1
+ 
+ #include <linux/irq.h>
++#include <linux/kernel.h>
+ #include <linux/kexec.h>
+ #include <linux/of_fdt.h>
+ #include <linux/slab.h>
+@@ -29,6 +30,8 @@ extern unsigned long arm64_kexec_dtb_addr;
+ extern unsigned long arm64_kexec_kimage_head;
+ extern unsigned long arm64_kexec_kimage_start;
+ 
++bool in_crash_kexec = false;
++
+ /**
+  * kexec_is_dtb - Helper routine to check the device tree header signature.
+  */
+@@ -370,8 +373,22 @@ static void machine_kexec_mask_interrupts(void)
+ 
+ void machine_crash_shutdown(struct pt_regs *regs)
+ {
++	struct pt_regs dummy_regs;
++	int cpu;
++
+ 	local_irq_disable();
++	in_crash_kexec = true;
++
++	/*
++	 * clear and initialize the per-cpu info. This is necessary
++	 * because, otherwise, slots for offline cpus would not be
++	 * filled up. See smp_send_stop().
++	 */
++	memset(&dummy_regs, 0, sizeof(dummy_regs));
++//	for_each_possible_cpu(cpu)
++//		crash_save_cpu(&dummy_regs, cpu);
+ 
++	/* shutdown non-boot cpus */
+ 	smp_send_stop();
+ 
+ 	crash_save_cpu(regs, smp_processor_id());
+diff --git a/arch/arm64/kernel/process.c b/arch/arm64/kernel/process.c
+index 37f5bdd..d6ee181 100644
+--- a/arch/arm64/kernel/process.c
++++ b/arch/arm64/kernel/process.c
+@@ -48,6 +48,7 @@
+ #include <asm/cacheflush.h>
+ #include <asm/fpsimd.h>
+ #include <asm/mmu_context.h>
++#include <asm/kexec.h>
+ #include <asm/processor.h>
+ #include <asm/stacktrace.h>
+ #include <asm/virt.h>
+@@ -62,12 +63,17 @@ void soft_restart(unsigned long addr)
+ {
+ 	setup_mm_for_reboot();
+ 
++	printk("------------- Value of in_crash_kexec=%d is_hyp_mode_available=%d\n",
++				in_crash_kexec, is_hyp_mode_available());
+ 	/* TODO: Remove this conditional when KVM can support CPU restart. */
+ 	if (IS_ENABLED(CONFIG_KVM))
+ 		cpu_soft_restart(virt_to_phys(cpu_reset), 0, addr);
+ 	else
+ 		cpu_soft_restart(virt_to_phys(cpu_reset),
+-				 is_hyp_mode_available(), addr);
++#ifdef CONFIG_KEXEC
++		!in_crash_kexec &&
++#endif
++		is_hyp_mode_available(), addr);
+ 
+ 	/* Should never get here */
+ 	BUG();
+diff --git a/arch/arm64/kernel/setup.c b/arch/arm64/kernel/setup.c
+index bdf043f..a337ba2 100644
+--- a/arch/arm64/kernel/setup.c
++++ b/arch/arm64/kernel/setup.c
+@@ -324,25 +324,6 @@ static void __init setup_machine_fdt(phys_addr_t dt_phys)
+ 	dump_stack_set_arch_desc("%s (DT)", of_flat_dt_get_machine_name());
+ }
+ 
+-/*
+- * Limit the memory size that was specified via FDT.
+- */
+-static int __init early_mem(char *p)
+-{
+-	phys_addr_t limit;
+-
+-	if (!p)
+-		return 1;
+-
+-	limit = memparse(p, &p) & PAGE_MASK;
+-	pr_notice("Memory limited to %lldMB\n", limit >> 20);
+-
+-	memblock_enforce_memory_limit(limit);
+-
+-	return 0;
+-}
+-early_param("mem", early_mem);
+-
+ #ifdef CONFIG_KEXEC
+ static inline unsigned long long get_total_mem(void)
+ {
+@@ -362,39 +343,41 @@ static inline unsigned long long get_total_mem(void)
+ static void __init reserve_crashkernel(void)
+ {
+ 	unsigned long long crash_size, crash_base;
+-	unsigned long long total_mem;
+ 	int ret;
+ 
+-	total_mem = get_total_mem();
+-	ret = parse_crashkernel(boot_command_line, total_mem,
++	/* use ULONG_MAX since we don't know system memory size here. */
++	ret = parse_crashkernel(boot_command_line, ULONG_MAX,
+ 				&crash_size, &crash_base);
+ 	if (ret)
+ 		return;
+ 
+ 	ret = memblock_reserve(crash_base, crash_size);
+ 	if (ret < 0) {
+-		pr_warn("crashkernel reservation failed"
+-			" - memory is in use (0x%lx)\n",
++		pr_warn("crashkernel reservation failed - memory is in use (0x%lx)\n",
+ 			(unsigned long)crash_base);
+ 		return;
+ 	}
+ 
+-	pr_info("Reserving %ldMB of memory at %ldMB"
+-		" for crashkernel (System RAM: %ldMB)\n",
++	pr_info("Reserving %ldMB of memory at %ldMB for crashkernel\n",
+ 		(unsigned long)(crash_size >> 20),
+-		(unsigned long)(crash_base >> 20),
+-		(unsigned long)(total_mem >> 20));
++		(unsigned long)(crash_base >> 20));
+ 
+ 	crashk_res.start = crash_base;
+ 	crashk_res.end = crash_base + crash_size - 1;
+-	insert_resource(&iomem_resource, &crashk_res);
+ }
++
+ #endif /* CONFIG_KEXEC */
+ 
+ #ifdef CONFIG_CRASH_DUMP
++/*
++ * reserve_elfcorehdr() - reserves memory for elf core header
++ *
++ * This function reserves memory area given in "elfcorehdr=" kernel command
++ * line parameter. The memory reserved is used by a dump capture kernel to
++ * identify the memory used by primary kernel.
++ */
+ static void __init reserve_elfcorehdr(void)
+ {
+-	struct resource res;
+ 	int ret;
+ 
+ 	if (!elfcorehdr_size)
+@@ -402,8 +385,7 @@ static void __init reserve_elfcorehdr(void)
+ 
+ 	ret = memblock_reserve(elfcorehdr_addr, elfcorehdr_size);
+ 	if (ret < 0) {
+-		pr_warn("elfcorehdr reservation failed"
+-			" - memory is in use (0x%lx)\n",
++		pr_warn("elfcorehdr reservation failed - memory is in use (0x%lx)\n",
+ 			(unsigned long)elfcorehdr_addr);
+ 		return;
+ 	}
+@@ -411,11 +393,6 @@ static void __init reserve_elfcorehdr(void)
+ 	pr_info("Reserving %ldKB of memory at %ldMB for elfcorehdr\n",
+ 		(unsigned long)(elfcorehdr_size >> 10),
+ 		(unsigned long)(elfcorehdr_addr >> 20));
+-
+-	res.name = "Vmore Elf Header";
+-	res.start = elfcorehdr_addr;
+-	res.end = elfcorehdr_addr + elfcorehdr_size - 1;
+-	insert_resource(&iomem_resource, &res);
+ }
+ #endif /* CONFIG_CRASH_DUMP */
+ 
+@@ -476,6 +453,14 @@ void __init setup_arch(char **cmdline_p)
+ 	local_async_enable();
+ 
+ 	efi_init();
++
++#ifdef CONFIG_KEXEC
++	reserve_crashkernel();
++#endif
++#ifdef CONFIG_CRASH_DUMP
++	reserve_elfcorehdr();
++#endif
++
+ 	arm64_memblock_init();
+ 
+ 	/* Parse the ACPI tables for possible boot-time configuration */
+@@ -485,12 +470,9 @@ void __init setup_arch(char **cmdline_p)
+ 	request_standard_resources();
+ 
+ #ifdef CONFIG_KEXEC
+-	reserve_crashkernel();
+-#endif
+-#ifdef CONFIG_CRASH_DUMP
+-	reserve_elfcorehdr();
++	/* kexec-tool will detect the region with /proc/iomem */
++	insert_resource(&iomem_resource, &crashk_res);
+ #endif
+-
+ 	efi_virtmap_init();
+ 	early_ioremap_reset();
+ 
+diff --git a/arch/arm64/kernel/smp.c b/arch/arm64/kernel/smp.c
+index dbd08f1..81469f5 100644
+--- a/arch/arm64/kernel/smp.c
++++ b/arch/arm64/kernel/smp.c
+@@ -36,7 +36,7 @@
+ #include <linux/completion.h>
+ #include <linux/of.h>
+ #include <linux/irq_work.h>
+-
++#include <linux/kexec.h>
+ #include <asm/alternative.h>
+ #include <asm/atomic.h>
+ #include <asm/cacheflush.h>
+@@ -545,7 +545,7 @@ static DEFINE_RAW_SPINLOCK(stop_lock);
+ /*
+  * ipi_cpu_stop - handle IPI from smp_send_stop()
+  */
+-static void ipi_cpu_stop(unsigned int cpu)
++static void ipi_cpu_stop(unsigned int cpu, struct pt_regs *regs)
+ {
+ 	if (system_state == SYSTEM_BOOTING ||
+ 	    system_state == SYSTEM_RUNNING) {
+@@ -559,6 +559,11 @@ static void ipi_cpu_stop(unsigned int cpu)
+ 
+ 	local_irq_disable();
+ 
++#ifdef CONFIG_KEXEC
++	if (in_crash_kexec)
++		crash_save_cpu(regs, cpu);
++#endif /* CONFIG_KEXEC */
++
+ 	while (1)
+ 		cpu_relax();
+ }
+@@ -595,7 +600,7 @@ void handle_IPI(int ipinr, struct pt_regs *regs)
+ 
+ 	case IPI_CPU_STOP:
+ 		irq_enter();
+-		ipi_cpu_stop(cpu);
++		ipi_cpu_stop(cpu, regs);
+ 		irq_exit();
+ 		break;
+ 
+diff --git a/arch/arm64/kvm/Kconfig b/arch/arm64/kvm/Kconfig
+index 8ba85e9..5079a30 100644
+--- a/arch/arm64/kvm/Kconfig
++++ b/arch/arm64/kvm/Kconfig
+@@ -18,6 +18,7 @@ if VIRTUALIZATION
+ 
+ config KVM
+ 	bool "Kernel-based Virtual Machine (KVM) support"
++	depends on !KEXEC
+ 	select MMU_NOTIFIER
+ 	select PREEMPT_NOTIFIERS
+ 	select ANON_INODES
+diff --git a/arch/arm64/mm/init.c b/arch/arm64/mm/init.c
+index c394cc7..fc7eda0 100644
+--- a/arch/arm64/mm/init.c
++++ b/arch/arm64/mm/init.c
+@@ -138,14 +138,35 @@ static void arm64_memory_present(void)
+ }
+ #endif
+ 
++static phys_addr_t memory_limit = (phys_addr_t)ULLONG_MAX;
++
++/*
++ * Limit the memory size that was specified via FDT.
++ */
++static int __init early_mem(char *p)
++{
++	if (!p)
++		return 1;
++
++	memory_limit = memparse(p, &p) & PAGE_MASK;
++	pr_notice("Memory limited to %lldMB\n", memory_limit >> 20);
++
++	return 0;
++}
++early_param("mem", early_mem);
++
+ void __init arm64_memblock_init(void)
+ {
++	printk("----->>> Memory limit to %d\n", memory_limit);
++	memblock_enforce_memory_limit(memory_limit);
++
+ 	/*
+ 	 * Register the kernel text, kernel data, initrd, and initial
+ 	 * pagetables with memblock.
+ 	 */
+ 	memblock_reserve(__pa(_text), _end - _text);
+ #ifdef CONFIG_BLK_DEV_INITRD
++	printk("----->>>> Initrd start=%p initrd end=%p\n", initrd_start, initrd_end);
+ 	if (initrd_start)
+ 		memblock_reserve(__virt_to_phys(initrd_start), initrd_end - initrd_start);
+ #endif
+diff --git a/arch/arm64/mm/ioremap.c b/arch/arm64/mm/ioremap.c
+index cbb99c8..be1b3e7 100644
+--- a/arch/arm64/mm/ioremap.c
++++ b/arch/arm64/mm/ioremap.c
+@@ -55,9 +55,10 @@ static void __iomem *__ioremap_caller(phys_addr_t phys_addr, size_t size,
+ 	/*
+ 	 * Don't allow RAM to be mapped.
+ 	 */
+-	if (WARN_ON(pfn_valid(__phys_to_pfn(phys_addr))))
++	if (WARN_ON(pfn_valid(__phys_to_pfn(phys_addr)))) {
++		printk("--- PFN not valid --- %lu\n", __phys_to_pfn(phys_addr));
+ 		return NULL;
+-
++	}
+ 	area = get_vm_area_caller(size, VM_IOREMAP, caller);
+ 	if (!area)
+ 		return NULL;
+diff --git a/drivers/irqchip/irq-gic-v3-its.c b/drivers/irqchip/irq-gic-v3-its.c
+index 8fb160e..54942cf 100644
+--- a/drivers/irqchip/irq-gic-v3-its.c
++++ b/drivers/irqchip/irq-gic-v3-its.c
+@@ -30,6 +30,7 @@
+ #include <linux/of_platform.h>
+ #include <linux/percpu.h>
+ #include <linux/slab.h>
++#include <linux/reboot.h>
+ 
+ #include <linux/irqchip/arm-gic-v3.h>
+ #include <linux/irqchip/arm-gic-acpi.h>
+@@ -1040,7 +1041,8 @@ static struct its_device *its_create_device(struct its_node *its, u32 dev_id,
+ 	 * of two entries. No, the architecture doesn't let you
+ 	 * express an ITT with a single entry.
+ 	 */
+-	nr_ites = max(2, roundup_pow_of_two(nvecs));
++	//nr_ites = max(2, roundup_pow_of_two(nvecs));
++	nr_ites = max_t(unsigned, 2, roundup_pow_of_two(nvecs));
+ 	sz = nr_ites * its->ite_size;
+ 	sz = max(sz, ITS_ITT_ALIGN) + ITS_ITT_ALIGN - 1;
+ 	itt = kzalloc(sz, GFP_KERNEL);
+@@ -1271,7 +1273,8 @@ static struct its_node *its_probe(void __iomem *its_base,
+ 	writeq_relaxed(baser, its->base + GITS_CBASER);
+ 	tmp = readq_relaxed(its->base + GITS_CBASER);
+ 	writeq_relaxed(0, its->base + GITS_CWRITER);
+-	writel_relaxed(1, its->base + GITS_CTLR);
++	//writel_relaxed(1, its->base + GITS_CTLR);
++	writel_relaxed(GITS_CTLR_ENABLE, its->base + GITS_CTLR);
+ 
+ 	if ((tmp ^ baser) & GITS_BASER_SHAREABILITY_MASK) {
+ 		pr_info("ITS: using cache flushing for cmd queue\n");
+@@ -1359,6 +1362,61 @@ out_unmap:
+ 	return err;
+ }
+ 
++static void its_shutdown(struct its_node *its)
++{
++	u32 count = 1000000;
++	u32 val;
++
++	val = readl_relaxed(its->base + GITS_CTLR);
++	val &= ~GITS_CTLR_ENABLE;
++	writel_relaxed(val, its->base + GITS_CTLR);
++
++	while (count--)
++	{
++		val = readl_relaxed(its->base + GITS_CTLR);
++		if (val & GITS_CTLR_QUIESCENT)
++			break;
++		cpu_relax();
++		udelay(1);
++	}
++
++	if (!count)
++		pr_err("%s: failed to shutdown:\n", its->node->full_name);
++	else
++		pr_err("%s: disabled.\n", its->node->full_name);
++
++}
++
++static int its_reboot(struct notifier_block *nfb, unsigned long val, void *v)
++{
++	struct its_node *its;
++
++	list_for_each_entry(its, &its_nodes, entry)
++		its_shutdown(its);
++
++	return NOTIFY_OK;
++
++}
++
++int its_reset(struct notifier_block *nfb, unsigned long val, void *v)
++{
++        struct its_node *its;
++
++	printk("Executing its_reset...\n");
++        list_for_each_entry(its, &its_nodes, entry)
++                its_shutdown(its);
++	printk("its_shutdown called...\n");
++
++        return NOTIFY_OK;
++
++}
++EXPORT_SYMBOL(its_reset);
++
++static struct notifier_block its_reboot_notifier = {
++	.notifier_call = its_reboot
++};
++
++
+ static bool gic_rdists_supports_plpis(void)
+ {
+ 	return !!(readl_relaxed(gic_data_rdist_rd_base() + GICR_TYPER) & GICR_TYPER_PLPIS);
+@@ -1465,6 +1523,7 @@ int __init its_init(struct rdists *rdists, struct irq_domain *parent_domain)
+ 
+ 	its_alloc_lpi_tables();
+ 	its_lpi_init(rdists->id_bits);
++	register_reboot_notifier(&its_reboot_notifier);
+ 
+ 	return 0;
+ }
+diff --git a/drivers/irqchip/irq-gic-v3.c b/drivers/irqchip/irq-gic-v3.c
+index e091a0b..212bf56 100644
+--- a/drivers/irqchip/irq-gic-v3.c
++++ b/drivers/irqchip/irq-gic-v3.c
+@@ -850,8 +850,11 @@ static int __init gic_of_init(struct device_node *node, struct device_node *pare
+ 	set_handle_irq(gic_handle_irq);
+ 
+ 	gic_support_lpis = gic_dist_supports_lpis(typer);
+-	if (gic_support_lpis)
+-		its_init(&gic_rdists, gic_domain);
++	if (gic_support_lpis) {
++		err = its_init(&gic_rdists, gic_domain);
++		if (err)
++			gic_support_lpis = 0;
++	}
+ 
+ 	gic_smp_init();
+ 	gic_cpu_init();
+@@ -1070,8 +1073,11 @@ gic_acpi_parse_madt_distributor(struct acpi_subtable_header *header,
+ 		set_handle_irq(gic_handle_irq);
+ 
+ 		gic_support_lpis = gic_dist_supports_lpis(typer);
+-		if (gic_support_lpis)
+-			its_init(&gic_rdists, gic_domain);
++		if (gic_support_lpis) {
++			err = its_init(&gic_rdists, gic_domain);
++			if (err)
++				gic_support_lpis = 0;
++		}
+ 
+ 		gic_smp_init();
+ 		gic_cpu_init();
+diff --git a/include/linux/irqchip/arm-gic-v3.h b/include/linux/irqchip/arm-gic-v3.h
+index 1e5d69e..3a3ac57 100644
+--- a/include/linux/irqchip/arm-gic-v3.h
++++ b/include/linux/irqchip/arm-gic-v3.h
+@@ -136,6 +136,9 @@
+ 
+ #define GITS_TRANSLATER			0x10040
+ 
++#define GITS_CTLR_ENABLE 		(1U << 0)
++#define GITS_CTLR_QUIESCENT 		(1U << 31)
++
+ #define GITS_TYPER_PTA			(1UL << 19)
+ 
+ #define GITS_CBASER_VALID		(1UL << 63)
+diff --git a/init/main.c b/init/main.c
+index 61b99376..4099625 100644
+--- a/init/main.c
++++ b/init/main.c
+@@ -574,6 +574,7 @@ asmlinkage __visible void __init start_kernel(void)
+ 	 * fragile until we cpu_idle() for the first time.
+ 	 */
+ 	preempt_disable();
++	printk("After preempt_disable..\n");
+ 	if (WARN(!irqs_disabled(),
+ 		 "Interrupts were enabled *very* early, fixing it\n"))
+ 		local_irq_disable();
+@@ -601,7 +602,9 @@ asmlinkage __visible void __init start_kernel(void)
+ 	call_function_init();
+ 	WARN(!irqs_disabled(), "Interrupts were enabled early\n");
+ 	early_boot_irqs_disabled = false;
++	printk("Before local_irq_enable..\n");
+ 	local_irq_enable();
++	printk("After local_irq_enable..\n");
+ 
+ 	kmem_cache_init_late();
+ 
+diff --git a/kernel/kexec.c b/kernel/kexec.c
+index b0759a8..0364fb5 100644
+--- a/kernel/kexec.c
++++ b/kernel/kexec.c
+@@ -1465,6 +1465,8 @@ out:
+ 
+ #endif /* CONFIG_KEXEC_FILE */
+ 
++extern int its_reset(struct notifier_block *, unsigned long, void *);
++
+ void crash_kexec(struct pt_regs *regs)
+ {
+ 	/* Take the kexec_mutex here to prevent sys_kexec_load
+@@ -1482,6 +1484,7 @@ void crash_kexec(struct pt_regs *regs)
+ 			crash_setup_regs(&fixed_regs, regs);
+ 			crash_save_vmcoreinfo();
+ 			machine_crash_shutdown(&fixed_regs);
++			its_reset(NULL, 0, NULL);
+ 			machine_kexec(kexec_crash_image);
+ 		}
+ 		mutex_unlock(&kexec_mutex);
+diff --git a/mm/memblock.c b/mm/memblock.c
+index 252b77b..38c8dfb 100644
+--- a/mm/memblock.c
++++ b/mm/memblock.c
+@@ -1357,6 +1357,7 @@ void __init memblock_enforce_memory_limit(phys_addr_t limit)
+ 	/* find out max address */
+ 	for_each_memblock(memory, r) {
+ 		if (limit <= r->size) {
++			printk("----->>>> max_addr reset to:%p r->base=%p limit=%d\n", r->base + limit, r->base, limit);
+ 			max_addr = r->base + limit;
+ 			break;
+ 		}
+-- 
+1.9.1
+
