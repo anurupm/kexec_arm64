@@ -1,0 +1,1331 @@
+From 7eb2658e2193503e780673ab2c85e0b8a1d284f6 Mon Sep 17 00:00:00 2001
+From: Anurup M <anurup.m@huawei.com>
+Date: Thu, 28 May 2015 11:53:19 +0530
+Subject: [PATCH 1/1] Latest changes
+
+---
+ arch/arm64/include/asm/smp_plat.h              |   1 +
+ arch/arm64/include/asm/virt.h                  |  28 +++---
+ arch/arm64/kernel/efi.c                        | 116 ++++++++++++-------------
+ arch/arm64/kernel/entry.S                      |   8 ++
+ arch/arm64/kernel/head.S                       |  86 +++++++++++++++---
+ arch/arm64/kernel/machine_kexec.c              |  31 ++++---
+ arch/arm64/kernel/process.c                    |   9 +-
+ arch/arm64/kernel/relocate_kernel.S            |  21 ++++-
+ arch/arm64/kernel/setup.c                      |  63 ++++++++++----
+ arch/arm64/kernel/smp.c                        |  18 ++--
+ arch/arm64/kvm/Kconfig                         |   1 -
+ arch/arm64/kvm/hyp.S                           |  24 ++---
+ arch/arm64/mm/init.c                           |  89 ++++++++++++++++++-
+ drivers/clocksource/arm_arch_timer.c           |   5 ++
+ drivers/firmware/efi/efi.c                     |  16 ++--
+ drivers/firmware/efi/libstub/arm-stub.c        |   8 +-
+ drivers/firmware/efi/libstub/efi-stub-helper.c |  10 +--
+ include/linux/kexec.h                          |  20 +----
+ init/main.c                                    |   3 -
+ kernel/irq/chip.c                              |   9 +-
+ kernel/kexec.c                                 |  74 +++++++++++++++-
+ 21 files changed, 440 insertions(+), 200 deletions(-)
+
+diff --git a/arch/arm64/include/asm/smp_plat.h b/arch/arm64/include/asm/smp_plat.h
+index 59e2823..c0f1fe1 100644
+--- a/arch/arm64/include/asm/smp_plat.h
++++ b/arch/arm64/include/asm/smp_plat.h
+@@ -39,5 +39,6 @@ static inline u32 mpidr_hash_size(void)
+  */
+ extern u64 __cpu_logical_map[NR_CPUS];
+ #define cpu_logical_map(cpu)    __cpu_logical_map[cpu]
++void __init do_post_cpus_up_work(void);
+ 
+ #endif /* __ASM_SMP_PLAT_H */
+diff --git a/arch/arm64/include/asm/virt.h b/arch/arm64/include/asm/virt.h
+index affea53..891dc53 100644
+--- a/arch/arm64/include/asm/virt.h
++++ b/arch/arm64/include/asm/virt.h
+@@ -18,18 +18,8 @@
+ #ifndef __ASM__VIRT_H
+ #define __ASM__VIRT_H
+ 
+-/*
+- * The arm64 hcall implementation uses the ISS field of the ESR_EL2 register to
+- * specify the hcall type.  The exception handlers are allowed to use registers
+- * x17 and x18 in their implementation.  Any routine issuing an hcall must not
+- * expect these registers to be preserved.
+- */
+-
+-/*
+- * HVC_CALL_HYP - Execute a hyp routine.
+- */
+-
+-#define HVC_CALL_HYP 3
++#define BOOT_CPU_MODE_EL1	(0xe11)
++#define BOOT_CPU_MODE_EL2	(0xe12)
+ 
+ /*
+  * HVC_GET_VECTORS - Return the value of the vbar_el2 register.
+@@ -46,6 +36,12 @@
+ #define HVC_SET_VECTORS 2
+ 
+ /*
++ * HVC_CALL_HYP - Execute a hyp routine.
++ */
++
++#define HVC_CALL_HYP 3
++
++/*
+  * HVC_CALL_FUNC - Execute a function at EL2.
+  *
+  * @x0: Physical address of the function to be executed.
+@@ -64,12 +60,10 @@
+  * @x0: The logical ID of the CPU.
+  */
+ 
+-//#define HVC_KVM_CPU_SHUTDOWN 4
+-#define BOOT_CPU_MODE_EL1	(0xe11)
+-#define BOOT_CPU_MODE_EL2	(0xe12)
++#define HVC_KVM_CPU_SHUTDOWN 4
+ 
+ #ifndef __ASSEMBLY__
+-#if 0
++
+ #include <linux/stringify.h>
+ #include <asm/compiler.h>
+ 
+@@ -85,8 +79,6 @@ static inline void kvm_cpu_shutdown_2(int cpu)
+ 		: "+r" (cpu));
+ }
+ 
+-#endif
+-
+ /*
+  * __boot_cpu_mode records what mode CPUs were booted in.
+  * A correctly-implemented bootloader must start all CPUs in the same mode:
+diff --git a/arch/arm64/kernel/efi.c b/arch/arm64/kernel/efi.c
+index 1e120b25c..c9cb0fb 100644
+--- a/arch/arm64/kernel/efi.c
++++ b/arch/arm64/kernel/efi.c
+@@ -38,19 +38,6 @@ struct efi_memory_map memmap;
+ 
+ static u64 efi_system_table;
+ 
+-static pgd_t efi_pgd[PTRS_PER_PGD] __page_aligned_bss;
+-
+-static struct mm_struct efi_mm = {
+-	.mm_rb			= RB_ROOT,
+-	.pgd			= efi_pgd,
+-	.mm_users		= ATOMIC_INIT(2),
+-	.mm_count		= ATOMIC_INIT(1),
+-	.mmap_sem		= __RWSEM_INITIALIZER(efi_mm.mmap_sem),
+-	.page_table_lock	= __SPIN_LOCK_UNLOCKED(efi_mm.page_table_lock),
+-	.mmlist			= LIST_HEAD_INIT(efi_mm.mmlist),
+-	INIT_MM_CONTEXT(efi_mm)
+-};
+-
+ static int uefi_debug __initdata;
+ static int __init uefi_debug_setup(char *str)
+ {
+@@ -228,49 +215,6 @@ void __init efi_init(void)
+ 	reserve_regions();
+ }
+ 
+-void __init efi_virtmap_init(void)
+-{
+-	efi_memory_desc_t *md;
+-
+-	if (!efi_enabled(EFI_BOOT))
+-		return;
+-
+-	for_each_efi_memory_desc(&memmap, md) {
+-		u64 paddr, npages, size;
+-		pgprot_t prot;
+-
+-		if (!(md->attribute & EFI_MEMORY_RUNTIME))
+-			continue;
+-		if (md->virt_addr == 0)
+-			return;
+-
+-		paddr = md->phys_addr;
+-		npages = md->num_pages;
+-		memrange_efi_to_native(&paddr, &npages);
+-		size = npages << PAGE_SHIFT;
+-
+-		pr_info("  EFI remap 0x%016llx => %p\n",
+-			md->phys_addr, (void *)md->virt_addr);
+-
+-		/*
+-		 * Only regions of type EFI_RUNTIME_SERVICES_CODE need to be
+-		 * executable, everything else can be mapped with the XN bits
+-		 * set.
+-		 */
+-		if (!is_normal_ram(md))
+-			prot = __pgprot(PROT_DEVICE_nGnRE);
+-		else if (md->type == EFI_RUNTIME_SERVICES_CODE)
+-			prot = PAGE_KERNEL_EXEC;
+-		else
+-			prot = PAGE_KERNEL;
+-
+-		create_pgd_mapping(&efi_mm, paddr, md->virt_addr, size, prot);
+-	}
+-	set_bit(EFI_VIRTMAP, &efi.flags);
+-	early_memunmap(memmap.map, memmap.map_end - memmap.map);
+-//	return true;
+-}
+-
+ /*
+  * Enable the UEFI Runtime Services if all prerequisites are in place, i.e.,
+  * non-early mapping of the UEFI system table and virtual mappings for all
+@@ -339,6 +283,19 @@ static int __init arm64_dmi_init(void)
+ }
+ core_initcall(arm64_dmi_init);
+ 
++static pgd_t efi_pgd[PTRS_PER_PGD] __page_aligned_bss;
++
++static struct mm_struct efi_mm = {
++	.mm_rb			= RB_ROOT,
++	.pgd			= efi_pgd,
++	.mm_users		= ATOMIC_INIT(2),
++	.mm_count		= ATOMIC_INIT(1),
++	.mmap_sem		= __RWSEM_INITIALIZER(efi_mm.mmap_sem),
++	.page_table_lock	= __SPIN_LOCK_UNLOCKED(efi_mm.page_table_lock),
++	.mmlist			= LIST_HEAD_INIT(efi_mm.mmlist),
++	INIT_MM_CONTEXT(efi_mm)
++};
++
+ static void efi_set_pgd(struct mm_struct *mm)
+ {
+ 	cpu_switch_mm(mm->pgd, mm);
+@@ -359,11 +316,46 @@ void efi_virtmap_unload(void)
+ 	preempt_enable();
+ }
+ 
+-/*
+- * UpdateCapsule() depends on the system being shutdown via
+- * ResetSystem().
+- */
+-bool efi_poweroff_required(void)
++void __init efi_virtmap_init(void)
+ {
+-	return efi_enabled(EFI_RUNTIME_SERVICES);
++	efi_memory_desc_t *md;
++
++	if (!efi_enabled(EFI_BOOT))
++		return;
++
++	for_each_efi_memory_desc(&memmap, md) {
++		u64 paddr, npages, size;
++		pgprot_t prot;
++
++		if (!(md->attribute & EFI_MEMORY_RUNTIME))
++			continue;
++		if (WARN(md->virt_addr == 0,
++			 "UEFI virtual mapping incomplete or missing -- no entry found for 0x%llx\n",
++			 md->phys_addr))
++			return;
++
++		paddr = md->phys_addr;
++		npages = md->num_pages;
++		memrange_efi_to_native(&paddr, &npages);
++		size = npages << PAGE_SHIFT;
++
++		pr_info("  EFI remap 0x%016llx => %p\n",
++			md->phys_addr, (void *)md->virt_addr);
++
++		/*
++		 * Only regions of type EFI_RUNTIME_SERVICES_CODE need to be
++		 * executable, everything else can be mapped with the XN bits
++		 * set.
++		 */
++		if (!is_normal_ram(md))
++			prot = __pgprot(PROT_DEVICE_nGnRE);
++		else if (md->type == EFI_RUNTIME_SERVICES_CODE)
++			prot = PAGE_KERNEL_EXEC;
++		else
++			prot = PAGE_KERNEL;
++
++		create_pgd_mapping(&efi_mm, paddr, md->virt_addr, size, prot);
++	}
++	set_bit(EFI_VIRTMAP, &efi.flags);
++	early_memunmap(memmap.map, memmap.map_end - memmap.map);
+ }
+diff --git a/arch/arm64/kernel/entry.S b/arch/arm64/kernel/entry.S
+index c0615ec..4a8c8cc 100644
+--- a/arch/arm64/kernel/entry.S
++++ b/arch/arm64/kernel/entry.S
+@@ -28,6 +28,14 @@
+ #include <asm/thread_info.h>
+ #include <asm/unistd.h>
+ 
++
++.macro putc c:req
++//        mov   x21, 0x1c090000
++        mov     x21, 0x80300000
++        mov     x22, \c
++        str     x22, [x21]
++.endm
++
+ /*
+  * Context tracking subsystem.  Used to instrument transitions
+  * between user and kernel mode.
+diff --git a/arch/arm64/kernel/head.S b/arch/arm64/kernel/head.S
+index 5a98702..e0d51fc 100644
+--- a/arch/arm64/kernel/head.S
++++ b/arch/arm64/kernel/head.S
+@@ -242,26 +242,50 @@ section_table:
+ .macro putc c:req
+ 	//mov	x21, 0x1c090000
+ 	mov	x21, 0x80300000
+-	mov	x22, \c
+-	str	x22, [x21]
++	mov	x26, \c
++	str	x26, [x21]
+ .endm
+ 
+-ENTRY(stext)
+-	putc	's'
+-	putc	't'
+-	putc	'e'
+-	putc	'x'
+-	putc	't'
+-	putc	'\n'
+-	putc	'\r'
++.macro putc1 c:req
++        //mov   x21, 0x1c090000
++        mov     x21, 0x80300000
++        mov     x24, \c
++        str     x24, [x21]
++.endm
++
++.macro putc2 c:req
++        //mov   x21, 0x1c090000
++        mov     x21, 0x80300000
++        mov     x27, \c
++        str     x27, [x21]
++.endm
+ 
++ENTRY(stext)
++//	putc 's'
++//	putc 't'
++//	putc 'e'
++//	putc '\n'
++//	putc '\r'
+ 	mov	x21, x0				// x21=FDT
+ 	bl	el2_setup			// Drop to EL1, w20=cpu_boot_mode
+ 	bl	__calc_phys_offset		// x24=PHYS_OFFSET, x28=PHYS_OFFSET-PAGE_OFFSET
+ 	bl	set_cpu_boot_mode_flag
+ 	mrs	x22, midr_el1			// x22=cpuid
+ 	mov	x0, x22
++	
++//	putc1 'l'
++//	putc1 'k'
++//	putc1 'p'
++//	putc1 'u'
++//	putc1 '\n'
++//	putc1 '\r'
+ 	bl	lookup_processor_type
++//	putc1 'a'
++//	putc1 'l'
++//	putc1 'k'
++//	putc1 'p'
++//	putc1 '\n'
++//	putc1 '\r'
+ 	mov	x23, x0				// x23=current cpu_table
+ 	/*
+ 	 * __error_p may end up out of range for cbz if text areas are
+@@ -280,11 +304,41 @@ ENTRY(stext)
+ 	 * the TCR will have been set.
+ 	 */
+ 	ldr	x27, __switch_data		// address to jump to after
+-						// MMU has been enabled
++	
++//	putc1 'b'
++//	putc1 'm'
++//	putc1 'm'
++//	putc1 'u'
++//	putc1 '\n'
++//	putc1 '\r'
++	
+ 	adrp	lr, __enable_mmu		// return (PIC) address
++	
++//	putc1 'a'
++//	putc1 'm'
++//	putc1 'm'
++//	putc1 'u'
++//	putc1 '\n'
++//	putc1 '\r'
++
+ 	add	lr, lr, #:lo12:__enable_mmu
++//	putc1 'c'
++//	putc1 'p'
++//	putc1 'a'
++//	putc1 '\n'
++//	putc1 '\r'
+ 	ldr	x12, [x23, #CPU_INFO_SETUP]
++//	putc1 'c'
++//	putc1 'p'
++//	putc1 'b'
++//	putc1 '\n'
++//	putc1 '\r'
+ 	add	x12, x12, x28			// __virt_to_phys
++//	putc1 'c'
++//	putc1 'p'
++//	putc1 'c'
++//	putc1 '\n'
++//	putc1 '\r'
+ 	br	x12				// initialise processor
+ ENDPROC(stext)
+ 
+@@ -480,6 +534,11 @@ __mmap_switched:
+ 	str	x21, [x5]			// Save FDT pointer
+ 	str	x24, [x6]			// Save PHYS_OFFSET
+ 	mov	x29, #0
++//	putc1 'x'	
++//	putc1 'y'	
++//	putc1 'z'	
++//	putc1 '\n'	
++//	putc1 '\r'	
+ 	b	start_kernel
+ ENDPROC(__mmap_switched)
+ 
+@@ -684,6 +743,11 @@ __enable_mmu:
+ 	msr	vbar_el1, x5
+ 	msr	ttbr0_el1, x25			// load TTBR0
+ 	msr	ttbr1_el1, x26			// load TTBR1
++//	putc1 'm'
++//	putc1 'm'
++//	putc1 'u'
++//	putc1 '\n'
++//	putc1 '\r'
+ 	isb
+ 	b	__turn_mmu_on
+ ENDPROC(__enable_mmu)
+diff --git a/arch/arm64/kernel/machine_kexec.c b/arch/arm64/kernel/machine_kexec.c
+index 142efa8..fdede3d 100644
+--- a/arch/arm64/kernel/machine_kexec.c
++++ b/arch/arm64/kernel/machine_kexec.c
+@@ -30,7 +30,7 @@ extern unsigned long arm64_kexec_dtb_addr;
+ extern unsigned long arm64_kexec_kimage_head;
+ extern unsigned long arm64_kexec_kimage_start;
+ 
+-//bool in_crash_kexec = false;
++bool in_crash_kexec = false;
+ 
+ /**
+  * kexec_is_dtb - Helper routine to check the device tree header signature.
+@@ -200,7 +200,6 @@ static void dump_cpus(void)
+ 	pr_devel("%s\n", s);
+ }
+ 
+-#if 0
+ /**
+  * kexec_find_dtb_seg - Helper routine to find the dtb segment.
+  */
+@@ -216,7 +215,6 @@ static const struct kexec_segment *kexec_find_dtb_seg(
+ 
+ 	return NULL;
+ }
+-#endif
+ 
+ void machine_kexec_cleanup(struct kimage *image)
+ {
+@@ -230,6 +228,9 @@ void machine_kexec_cleanup(struct kimage *image)
+  */
+ int machine_kexec_prepare(struct kimage *image)
+ {
++	const struct kexec_segment *dtb_seg = kexec_find_dtb_seg(image);
++
++	arm64_kexec_dtb_addr = dtb_seg ? dtb_seg->mem : 0;
+ 	arm64_kexec_kimage_start = image->start;
+ 
+ 	kexec_image_info(image);
+@@ -253,7 +254,9 @@ static void kexec_list_flush(unsigned long kimage_head)
+ 	unsigned long *entry;
+ 
+ 	for (entry = &kimage_head, dest = NULL; ; entry++) {
+-		unsigned int flag = *entry & IND_FLAGS;
++		unsigned int flag = *entry &
++			(IND_DESTINATION | IND_INDIRECTION | IND_DONE |
++			IND_SOURCE);
+ 		void *addr = phys_to_virt(*entry & PAGE_MASK);
+ 
+ 		switch (flag) {
+@@ -291,7 +294,9 @@ void machine_kexec(struct kimage *image)
+ 	arm64_kexec_kimage_head = image->head;
+ 
+ 	reboot_code_buffer_phys = page_to_phys(image->control_code_page);
++//	printk("The reboot code buffer address is %lx\n", reboot_code_buffer_phys);
+ 	reboot_code_buffer = phys_to_virt(reboot_code_buffer_phys);
++//	printk("The reboot code buffer virtual address is %lx\n", reboot_code_buffer);
+ 
+ 	kexec_image_info(image);
+ 
+@@ -307,8 +312,8 @@ void machine_kexec(struct kimage *image)
+ 		__func__, __LINE__, relocate_new_kernel_size,
+ 		relocate_new_kernel_size);
+ 
+-//	pr_devel("%s:%d: kexec_dtb_addr:           %lx\n", __func__, __LINE__,
+-//		arm64_kexec_dtb_addr);
++	pr_devel("%s:%d: kexec_dtb_addr:           %lx\n", __func__, __LINE__,
++		arm64_kexec_dtb_addr);
+ 	pr_devel("%s:%d: kexec_kimage_head:        %lx\n", __func__, __LINE__,
+ 		arm64_kexec_kimage_head);
+ 	pr_devel("%s:%d: kexec_kimage_start:       %lx\n", __func__, __LINE__,
+@@ -330,7 +335,7 @@ void machine_kexec(struct kimage *image)
+ 	/* Flush the kimage list. */
+ 	kexec_list_flush(image->head);
+ 
+-	pr_info("Bye!\n");
++	pr_devel("Bye!\n");
+ 
+ 	/* Disable all DAIF exceptions. */
+ 	asm volatile ("msr daifset, #0xf" : : : "memory");
+@@ -370,26 +375,26 @@ static void machine_kexec_mask_interrupts(void)
+ 
+ void machine_crash_shutdown(struct pt_regs *regs)
+ {
+-/*	struct pt_regs dummy_regs;
++	struct pt_regs dummy_regs;
+ 	int cpu;
+-*/
++
+ 	local_irq_disable();
+-//	in_crash_kexec = true;
++	in_crash_kexec = true;
+ 
+ 	/*
+ 	 * clear and initialize the per-cpu info. This is necessary
+ 	 * because, otherwise, slots for offline cpus would not be
+ 	 * filled up. See smp_send_stop().
+ 	 */
+-/*	memset(&dummy_regs, 0, sizeof(dummy_regs));
++	memset(&dummy_regs, 0, sizeof(dummy_regs));
+ 	for_each_possible_cpu(cpu)
+ 		crash_save_cpu(&dummy_regs, cpu);
+-*/
++
+ 	/* shutdown non-boot cpus */
+ 	smp_send_stop();
+ 
+ 	crash_save_cpu(regs, smp_processor_id());
+ 	machine_kexec_mask_interrupts();
+ 
+-	pr_info("Loading crashdump kernel...\n");
++	pr_devel("Loading crashdump kernel...\n");
+ }
+diff --git a/arch/arm64/kernel/process.c b/arch/arm64/kernel/process.c
+index 49282fd..47e2651 100644
+--- a/arch/arm64/kernel/process.c
++++ b/arch/arm64/kernel/process.c
+@@ -63,19 +63,14 @@ EXPORT_SYMBOL(__stack_chk_guard);
+ void soft_restart(unsigned long addr)
+ {
+ 	setup_mm_for_reboot();
+-#if 0
+-#ifdef CONFIG_KEXEC
+-//	printk("------------- Value of in_crash_kexec=%d is_hyp_mode_available=%d\n",
+-				in_crash_kexec, is_hyp_mode_available());
+-#endif
+-#endif
++
+ 	/* TODO: Remove this conditional when KVM can support CPU restart. */
+ 	if (IS_ENABLED(CONFIG_KVM))
+ 		cpu_soft_restart(virt_to_phys(cpu_reset), 0, addr);
+ 	else
+ 		cpu_soft_restart(virt_to_phys(cpu_reset),
+-#if 0
+ #ifdef CONFIG_KEXEC
++#if 0
+ 		!in_crash_kexec &&
+ #endif
+ #endif
+diff --git a/arch/arm64/kernel/relocate_kernel.S b/arch/arm64/kernel/relocate_kernel.S
+index 991df4b..7f6b4c6 100644
+--- a/arch/arm64/kernel/relocate_kernel.S
++++ b/arch/arm64/kernel/relocate_kernel.S
+@@ -8,14 +8,26 @@
+  * published by the Free Software Foundation.
+  */
+ 
+-#include <linux/kexec.h>
+-
+ #include <asm/assembler.h>
+ #include <asm/kexec.h>
+ #include <asm/memory.h>
+ #include <asm/page.h>
+ #include <asm/proc-macros.S>
+ 
++/* The list entry flags. */
++
++#define IND_DESTINATION_BIT 0
++#define IND_INDIRECTION_BIT 1
++#define IND_DONE_BIT        2
++#define IND_SOURCE_BIT      3
++
++.macro putc c:req
++        //mov   x21, 0x1c090000
++        mov     x21, 0x80300000
++        mov     x22, \c
++        str     x22, [x21]
++.endm
++
+ /*
+  * relocate_new_kernel - Put a 2nd stage kernel image in place and boot it.
+  *
+@@ -130,8 +142,9 @@ arm64_kexec_kimage_start:
+ 	.quad	0x0
+ 
+ /*
+- * arm64_kexec_dtb_addr - Physical address of device tree.
+-*/
++ * arm64_kexec_dtb_addr - Physical address of a device tree.
++ */
++.globl arm64_kexec_dtb_addr
+ arm64_kexec_dtb_addr:
+ 	.quad	0x0
+ 
+diff --git a/arch/arm64/kernel/setup.c b/arch/arm64/kernel/setup.c
+index d0348a4..66a2090 100644
+--- a/arch/arm64/kernel/setup.c
++++ b/arch/arm64/kernel/setup.c
+@@ -41,16 +41,17 @@
+ #include <linux/fs.h>
+ #include <linux/proc_fs.h>
+ #include <linux/memblock.h>
++#include <linux/of_iommu.h>
+ #include <linux/of_fdt.h>
+ #include <linux/of_platform.h>
+ #include <linux/efi.h>
++#include <asm/cputable.h>
+ #include <linux/personality.h>
+ 
+ #include <asm/fixmap.h>
+ #include <asm/cpu.h>
+ #include <asm/cputype.h>
+ #include <asm/elf.h>
+-#include <asm/cputable.h>
+ #include <asm/cpufeature.h>
+ #include <asm/cpu_ops.h>
+ #include <asm/sections.h>
+@@ -62,7 +63,6 @@
+ #include <asm/memblock.h>
+ #include <asm/psci.h>
+ #include <asm/efi.h>
+-#include <asm/acpi.h>
+ #include <asm/virt.h>
+ 
+ unsigned int processor_id;
+@@ -121,6 +121,11 @@ void __init early_print(const char *str, ...)
+ 	printk("%s", buf);
+ }
+ 
++/*
++ * The recorded values of x0 .. x3 upon kernel entry.
++ */
++u64 __cacheline_aligned boot_args[4];
++
+ void __init smp_setup_processor_id(void)
+ {
+ 	u64 mpidr = read_cpuid_mpidr() & MPIDR_HWID_BITMASK;
+@@ -209,6 +214,30 @@ static void __init smp_build_mpidr_hash(void)
+ }
+ #endif
+ 
++static void __init hyp_mode_check(void)
++{
++	if (is_hyp_mode_available())
++		pr_info("CPU: All CPU(s) started at EL2\n");
++	else if (is_hyp_mode_mismatched())
++		WARN_TAINT(1, TAINT_CPU_OUT_OF_SPEC,
++			   "CPU: CPUs started in inconsistent modes");
++	else
++		pr_info("CPU: All CPU(s) started at EL1\n");
++}
++
++void __init do_post_cpus_up_work(void)
++{
++	hyp_mode_check();
++	apply_alternatives_all();
++}
++
++#ifdef CONFIG_UP_LATE_INIT
++void __init up_late_init(void)
++{
++	do_post_cpus_up_work();
++}
++#endif /* CONFIG_UP_LATE_INIT */
++
+ static void __init setup_processor(void)
+ {
+ 	struct cpu_info *cpu_info;
+@@ -343,7 +372,7 @@ static inline unsigned long long get_total_mem(void)
+  */
+ static void __init reserve_crashkernel(void)
+ {
+-	unsigned long long crash_size, crash_base;
++	unsigned long long crash_size = 0, crash_base = 0;
+ 	int ret;
+ 
+ 	/* use ULONG_MAX since we don't know system memory size here. */
+@@ -463,9 +492,9 @@ void __init setup_arch(char **cmdline_p)
+ #endif
+ 
+ 	arm64_memblock_init();
+-
+-	/* Parse the ACPI tables for possible boot-time configuration */
+-	acpi_boot_table_init();
++	
++        /* Parse the ACPI tables for possible boot-time configuration */
++        acpi_boot_table_init();
+ 
+ 	paging_init();
+ 	request_standard_resources();
+@@ -474,20 +503,21 @@ void __init setup_arch(char **cmdline_p)
+ 	/* kexec-tool will detect the region with /proc/iomem */
+ 	insert_resource(&iomem_resource, &crashk_res);
+ #endif
++
+ 	efi_virtmap_init();
+-	early_ioremap_reset();
+ 
+-	if (acpi_disabled) {
+-		unflatten_device_tree();
+-		psci_dt_init();
+-		cpu_read_bootcpu_ops();
++	early_ioremap_reset();
++        if (acpi_disabled) {
++               unflatten_device_tree();
++               psci_dt_init();
++               cpu_read_bootcpu_ops();
+ #ifdef CONFIG_SMP
+-		of_smp_init_cpus();
++               of_smp_init_cpus();
+ #endif
+-	} else {
+-		psci_acpi_init();
+-		acpi_smp_init_cpus();
+-	}
++       } else {
++               psci_acpi_init();
++               acpi_smp_init_cpus();
++       }
+ 
+ #ifdef CONFIG_SMP
+ 	smp_build_mpidr_hash();
+@@ -504,6 +534,7 @@ void __init setup_arch(char **cmdline_p)
+ 
+ static int __init arm64_device_init(void)
+ {
++	of_iommu_init();
+ 	of_platform_populate(NULL, of_default_bus_match_table, NULL, NULL);
+ 	return 0;
+ }
+diff --git a/arch/arm64/kernel/smp.c b/arch/arm64/kernel/smp.c
+index 2fb8200..265d6b1 100644
+--- a/arch/arm64/kernel/smp.c
++++ b/arch/arm64/kernel/smp.c
+@@ -545,8 +545,8 @@ static DEFINE_RAW_SPINLOCK(stop_lock);
+ /*
+  * ipi_cpu_stop - handle IPI from smp_send_stop()
+  */
+-//static void ipi_cpu_stop(unsigned int cpu, struct pt_regs *regs)
+-static void ipi_cpu_stop(unsigned int cpu)
++//static void ipi_cpu_stop(unsigned int cpu)
++static void ipi_cpu_stop(unsigned int cpu, struct pt_regs *regs)
+ {
+ 	if (system_state == SYSTEM_BOOTING ||
+ 	    system_state == SYSTEM_RUNNING) {
+@@ -559,12 +559,12 @@ static void ipi_cpu_stop(unsigned int cpu)
+ 	set_cpu_online(cpu, false);
+ 
+ 	local_irq_disable();
+-#if 0
+ #ifdef CONFIG_KEXEC
+-	if (in_crash_kexec)
++	if (in_crash_kexec) {
+ 		crash_save_cpu(regs, cpu);
++		flush_cache_all();
++	}
+ #endif /* CONFIG_KEXEC */
+-#endif
+ 	while (1)
+ 		cpu_relax();
+ }
+@@ -601,8 +601,8 @@ void handle_IPI(int ipinr, struct pt_regs *regs)
+ 
+ 	case IPI_CPU_STOP:
+ 		irq_enter();
+-//		ipi_cpu_stop(cpu, regs);
+-		ipi_cpu_stop(cpu);
++		ipi_cpu_stop(cpu, regs);
++		//ipi_cpu_stop(cpu);
+ 		irq_exit();
+ 		break;
+ 
+@@ -656,7 +656,7 @@ void smp_send_stop(void)
+ 
+ 		smp_cross_call(&mask, IPI_CPU_STOP);
+ 	}
+-
++//#if 0
+ 	/* Wait up to one second for other CPUs to stop */
+ 	timeout = USEC_PER_SEC;
+ 	while (num_online_cpus() > 1 && timeout--)
+@@ -665,7 +665,7 @@ void smp_send_stop(void)
+ 	timeout = USEC_PER_SEC;
+ 	while (num_online_cpus() > 1 && timeout--)
+ 		udelay(1);
+-
++//#endif
+ 	if (num_online_cpus() > 1)
+ 		pr_warning("SMP: failed to stop secondary CPUs\n");
+ }
+diff --git a/arch/arm64/kvm/Kconfig b/arch/arm64/kvm/Kconfig
+index 5079a30..8ba85e9 100644
+--- a/arch/arm64/kvm/Kconfig
++++ b/arch/arm64/kvm/Kconfig
+@@ -18,7 +18,6 @@ if VIRTUALIZATION
+ 
+ config KVM
+ 	bool "Kernel-based Virtual Machine (KVM) support"
+-	depends on !KEXEC
+ 	select MMU_NOTIFIER
+ 	select PREEMPT_NOTIFIERS
+ 	select ANON_INODES
+diff --git a/arch/arm64/kvm/hyp.S b/arch/arm64/kvm/hyp.S
+index bb4a7ec..271c9c9 100644
+--- a/arch/arm64/kvm/hyp.S
++++ b/arch/arm64/kvm/hyp.S
+@@ -1145,10 +1145,10 @@ el1_sync:					// Guest trapped into EL2
+ 	push	x2, x3
+ 
+ 	mrs	x1, esr_el2
+-	lsr	x2, x1, #ESR_ELx_EC_SHIFT
+-	and	x0, x1, #ESR_ELx_ISS_MASK
++	and	x0, x1, #ESR_EL2_ISS
++	lsr	x2, x1, #ESR_EL2_EC_SHIFT
+ 
+-	cmp	x2, #ESR_ELx_EC_HVC64
++	cmp	x2, #ESR_EL2_EC_HVC64
+ 	b.ne	el1_trap
+ 
+ 	mrs	x3, vttbr_el2			// If vttbr is valid, the 64bit guest
+@@ -1164,7 +1164,7 @@ el1_sync:					// Guest trapped into EL2
+ 	mrs	x0, vbar_el2
+ 	b	2f
+ 
+-	b.ne	1f
++1:	/* Default to HVC_CALL_HYP. */
+ 
+ 	push	lr, xzr
+ 
+@@ -1179,30 +1179,20 @@ el1_sync:					// Guest trapped into EL2
+ 	blr	lr
+ 
+ 	pop	lr, xzr
+-	b	2f
+-
+-1:	cmp	x10, #HVC_KVM_CPU_SHUTDOWN
+-	b.ne	3f
+-
+-	// TODO.
+-
+-	b	2f
+-
+ 2:	eret
+-3:	br	xzr				// panic
+ 
+ el1_trap:
+ 	/*
+ 	 * x1: ESR
+ 	 * x2: ESR_EC
+ 	 */
+-	cmp	x2, #ESR_ELx_EC_DABT_LOW
+-	mov	x0, #ESR_ELx_EC_IABT_LOW
++	cmp	x2, #ESR_EL2_EC_DABT
++	mov	x0, #ESR_EL2_EC_IABT
+ 	ccmp	x2, x0, #4, ne
+ 	b.ne	1f		// Not an abort we care about
+ 
+ 	/* This is an abort. Check for permission fault */
+-	and	x2, x1, #ESR_ELx_FSC_TYPE
++	and	x2, x1, #ESR_EL2_FSC_TYPE
+ 	cmp	x2, #FSC_PERM
+ 	b.ne	1f		// Not a permission fault
+ 
+diff --git a/arch/arm64/mm/init.c b/arch/arm64/mm/init.c
+index e0e0cc3..ed9a0fc 100644
+--- a/arch/arm64/mm/init.c
++++ b/arch/arm64/mm/init.c
+@@ -34,6 +34,8 @@
+ #include <linux/dma-contiguous.h>
+ #include <linux/efi.h>
+ #include <linux/swiotlb.h>
++#include <linux/kexec.h>
++#include <linux/crash_dump.h>
+ 
+ #include <asm/fixmap.h>
+ #include <asm/sections.h>
+@@ -65,6 +67,84 @@ static int __init early_initrd(char *p)
+ early_param("initrd", early_initrd);
+ #endif
+ 
++#if 0
+++#ifdef CONFIG_KEXEC
+++/*
+++ * reserve_crashkernel() - reserves memory for crash kernel
+++ *
+++ * This function reserves memory area given in "crashkernel=" kernel command
+++ * line parameter. The memory reserved is used by a dump capture kernel when
+++ * primary kernel is crashing.
+++ */
+++static void __init reserve_crashkernel(phys_addr_t limit)
+++{
+++	unsigned long long crash_size = 0, crash_base = 0;
+++	int ret;
+++
+++	ret = parse_crashkernel(boot_command_line, limit,
+++				&crash_size, &crash_base);
+++	if (ret)
+++		return;
+++
+++	if (crash_base == 0) {
+++		crash_base = memblock_alloc(crash_size, 1 << 20);
+++		if (crash_base == 0) {
+++			pr_warn("crashkernel allocation failed (size:%llx)\n",
+++				crash_size);
+++			return;
+++		}
+++	} else {
+++		/* User specifies base address explicitly. Sanity check */
+++		if (!memblock_is_region_memory(crash_base, crash_size) ||
+++			memblock_is_region_reserved(crash_base, crash_size)) {
+++			pr_warn("crashkernel= has wrong address or size\n");
+++			return;
+++		}
+++
+++		if (memblock_reserve(crash_base, crash_size)) {
+++			pr_warn("crashkernel reservation failed - out of memory\n");
+++			return;
+++		}
+++	}
+++
+++	pr_info("Reserving %lldMB of memory at %lldMB for crashkernel\n",
+++		crash_size >> 20, crash_base >> 20);
+++
+++	crashk_res.start = crash_base;
+++	crashk_res.end = crash_base + crash_size - 1;
+++}
+++#endif /* CONFIG_KEXEC */
+++
+++#ifdef CONFIG_CRASH_DUMP
+++/*
+++ * reserve_elfcorehdr() - reserves memory for elf core header
+++ *
+++ * This function reserves memory area given in "elfcorehdr=" kernel command
+++ * line parameter. The memory reserved is used by a dump capture kernel to
+++ * identify the memory used by primary kernel.
+++ */
+++static void __init reserve_elfcorehdr(void)
+++{
+++	if (!elfcorehdr_size)
+++		return;
+++
+++	if (memblock_is_region_reserved(elfcorehdr_addr, elfcorehdr_size)) {
+++		pr_warn("elfcorehdr reservation failed - memory is in use (0x%llx)\n",
+++			elfcorehdr_addr);
+++		return;
+++	}
+++
+++	if (memblock_reserve(elfcorehdr_addr, elfcorehdr_size)) {
+++		pr_warn("elfcorehdr reservation failed - out of memory\n");
+++		return;
+++	}
+++
+++	pr_info("Reserving %lldKB of memory at %lldMB for elfcorehdr\n",
+++		elfcorehdr_size >> 10, elfcorehdr_addr >> 20);
+++}
+++#endif /* CONFIG_CRASH_DUMP */
++#endif
++
+ /*
+  * Return the maximum physical address for ZONE_DMA (DMA_BIT_MASK(32)). It
+  * currently assumes that for memory starting above 4G, 32-bit devices will
+@@ -358,8 +438,15 @@ static int keep_initrd;
+ 
+ void free_initrd_mem(unsigned long start, unsigned long end)
+ {
+-	if (!keep_initrd)
++	if (!keep_initrd) {
++#if 0
++		if (start == initrd_start)
++			start = round_down(start, PAGE_SIZE);
++		if (end == initrd_end)
++			end = round_up(end, PAGE_SIZE);
++#endif
+ 		free_reserved_area((void *)start, (void *)end, 0, "initrd");
++	}
+ }
+ 
+ static int __init keepinitrd_setup(char *__unused)
+diff --git a/drivers/clocksource/arm_arch_timer.c b/drivers/clocksource/arm_arch_timer.c
+index 693ee7e..e3b2b3a 100644
+--- a/drivers/clocksource/arm_arch_timer.c
++++ b/drivers/clocksource/arm_arch_timer.c
+@@ -562,6 +562,7 @@ static int __init arch_timer_register(void)
+ {
+ 	int err;
+ 	int ppi;
++	struct irq_desc *desc;
+ 
+ 	arch_timer_evt = alloc_percpu(struct clock_event_device);
+ 	if (!arch_timer_evt) {
+@@ -573,6 +574,8 @@ static int __init arch_timer_register(void)
+ 		ppi = arch_timer_ppi[VIRT_PPI];
+ 		err = request_percpu_irq(ppi, arch_timer_handler_virt,
+ 					 "arch_timer", arch_timer_evt);
++		desc = irq_to_desc(ppi);
++		printk("\n----- hwirq for irq#%d is %d ----\n", ppi, desc->irq_data.hwirq);
+ 	} else {
+ 		ppi = arch_timer_ppi[PHYS_SECURE_PPI];
+ 		err = request_percpu_irq(ppi, arch_timer_handler_phys,
+@@ -585,6 +588,8 @@ static int __init arch_timer_register(void)
+ 				free_percpu_irq(arch_timer_ppi[PHYS_SECURE_PPI],
+ 						arch_timer_evt);
+ 		}
++		desc = irq_to_desc(ppi);
++		printk("\n----- hwirq for irq#%d is %d ----\n", ppi, desc->irq_data.hwirq);
+ 	}
+ 
+ 	if (err) {
+diff --git a/drivers/firmware/efi/efi.c b/drivers/firmware/efi/efi.c
+index 31a1b85..b7ba9d8 100644
+--- a/drivers/firmware/efi/efi.c
++++ b/drivers/firmware/efi/efi.c
+@@ -115,24 +115,15 @@ EFI_ATTR_SHOW(fw_vendor);
+ EFI_ATTR_SHOW(runtime);
+ EFI_ATTR_SHOW(config_table);
+ 
+-static ssize_t fw_platform_size_show(struct kobject *kobj,
+-				     struct kobj_attribute *attr, char *buf)
+-{
+-	return sprintf(buf, "%d\n", efi_enabled(EFI_64BIT) ? 64 : 32);
+-}
+-
+ static struct kobj_attribute efi_attr_fw_vendor = __ATTR_RO(fw_vendor);
+ static struct kobj_attribute efi_attr_runtime = __ATTR_RO(runtime);
+ static struct kobj_attribute efi_attr_config_table = __ATTR_RO(config_table);
+-static struct kobj_attribute efi_attr_fw_platform_size =
+-	__ATTR_RO(fw_platform_size);
+ 
+ static struct attribute *efi_subsys_attrs[] = {
+ 	&efi_attr_systab.attr,
+ 	&efi_attr_fw_vendor.attr,
+ 	&efi_attr_runtime.attr,
+ 	&efi_attr_config_table.attr,
+-	&efi_attr_fw_platform_size.attr,
+ 	NULL,
+ };
+ 
+@@ -285,7 +276,11 @@ static __init int match_config_table(efi_guid_t *guid,
+ 	int i;
+ 
+ 	if (table_types) {
++		efi_guid_unparse(guid, str);
++
+ 		for (i = 0; efi_guidcmp(table_types[i].guid, NULL_GUID); i++) {
++			efi_guid_unparse(&table_types[i].guid, str);
++
+ 			if (!efi_guidcmp(*guid, table_types[i].guid)) {
+ 				*(table_types[i].ptr) = table;
+ 				pr_cont(" %s=0x%lx ",
+@@ -416,7 +411,8 @@ static int __init fdt_find_uefi_params(unsigned long node, const char *uname,
+ 	u64 val;
+ 	int i, len;
+ 
+-	if (depth != 1 || strcmp(uname, "chosen") != 0)
++	if (depth != 1 ||
++	    (strcmp(uname, "chosen") != 0 && strcmp(uname, "chosen@0") != 0))
+ 		return 0;
+ 
+ 	for (i = 0; i < ARRAY_SIZE(dt_params); i++) {
+diff --git a/drivers/firmware/efi/libstub/arm-stub.c b/drivers/firmware/efi/libstub/arm-stub.c
+index dcae482..e2432b3 100644
+--- a/drivers/firmware/efi/libstub/arm-stub.c
++++ b/drivers/firmware/efi/libstub/arm-stub.c
+@@ -17,10 +17,10 @@
+ 
+ #include "efistub.h"
+ 
+-static int efi_secureboot_enabled(efi_system_table_t *sys_table_arg)
++static int __init efi_secureboot_enabled(efi_system_table_t *sys_table_arg)
+ {
+-	static efi_guid_t const var_guid = EFI_GLOBAL_VARIABLE_GUID;
+-	static efi_char16_t const var_name[] = {
++	static efi_guid_t const var_guid __initconst = EFI_GLOBAL_VARIABLE_GUID;
++	static efi_char16_t const var_name[] __initconst = {
+ 		'S', 'e', 'c', 'u', 'r', 'e', 'B', 'o', 'o', 't', 0 };
+ 
+ 	efi_get_variable_t *f_getvar = sys_table_arg->runtime->get_variable;
+@@ -164,7 +164,7 @@ efi_status_t handle_kernel_image(efi_system_table_t *sys_table,
+  * for both archictectures, with the arch-specific code provided in the
+  * handle_kernel_image() function.
+  */
+-unsigned long efi_entry(void *handle, efi_system_table_t *sys_table,
++unsigned long __init efi_entry(void *handle, efi_system_table_t *sys_table,
+ 			       unsigned long *image_addr)
+ {
+ 	efi_loaded_image_t *image;
+diff --git a/drivers/firmware/efi/libstub/efi-stub-helper.c b/drivers/firmware/efi/libstub/efi-stub-helper.c
+index f07d4a6..e766df6 100644
+--- a/drivers/firmware/efi/libstub/efi-stub-helper.c
++++ b/drivers/firmware/efi/libstub/efi-stub-helper.c
+@@ -110,7 +110,7 @@ fail:
+ }
+ 
+ 
+-unsigned long get_dram_base(efi_system_table_t *sys_table_arg)
++unsigned long __init get_dram_base(efi_system_table_t *sys_table_arg)
+ {
+ 	efi_status_t status;
+ 	unsigned long map_size;
+@@ -179,12 +179,12 @@ again:
+ 		start = desc->phys_addr;
+ 		end = start + desc->num_pages * (1UL << EFI_PAGE_SHIFT);
+ 
+-		if (end > max)
+-			end = max;
+-
+-		if ((start + size) > end)
++		if ((start + size) > end || (start + size) > max)
+ 			continue;
+ 
++		if (end - size > max)
++			end = max;
++
+ 		if (round_down(end - size, align) < start)
+ 			continue;
+ 
+diff --git a/include/linux/kexec.h b/include/linux/kexec.h
+index b23412c..9d957b7 100644
+--- a/include/linux/kexec.h
++++ b/include/linux/kexec.h
+@@ -1,19 +1,6 @@
+ #ifndef LINUX_KEXEC_H
+ #define LINUX_KEXEC_H
+ 
+-#define IND_DESTINATION_BIT 0
+-#define IND_INDIRECTION_BIT 1
+-#define IND_DONE_BIT        2
+-#define IND_SOURCE_BIT      3
+-
+-#define IND_DESTINATION  (1 << IND_DESTINATION_BIT)
+-#define IND_INDIRECTION  (1 << IND_INDIRECTION_BIT)
+-#define IND_DONE         (1 << IND_DONE_BIT)
+-#define IND_SOURCE       (1 << IND_SOURCE_BIT)
+-#define IND_FLAGS (IND_DESTINATION | IND_INDIRECTION | IND_DONE | IND_SOURCE)
+-
+-#if !defined(__ASSEMBLY__)
+-
+ #include <uapi/linux/kexec.h>
+ 
+ #ifdef CONFIG_KEXEC
+@@ -77,6 +64,10 @@
+  */
+ 
+ typedef unsigned long kimage_entry_t;
++#define IND_DESTINATION  0x1
++#define IND_INDIRECTION  0x2
++#define IND_DONE         0x4
++#define IND_SOURCE       0x8
+ 
+ struct kexec_segment {
+ 	/*
+@@ -322,7 +313,4 @@ struct task_struct;
+ static inline void crash_kexec(struct pt_regs *regs) { }
+ static inline int kexec_should_crash(struct task_struct *p) { return 0; }
+ #endif /* CONFIG_KEXEC */
+-
+-#endif /* !defined(__ASSEBMLY__) */
+-
+ #endif /* LINUX_KEXEC_H */
+diff --git a/init/main.c b/init/main.c
+index 4099625..61b99376 100644
+--- a/init/main.c
++++ b/init/main.c
+@@ -574,7 +574,6 @@ asmlinkage __visible void __init start_kernel(void)
+ 	 * fragile until we cpu_idle() for the first time.
+ 	 */
+ 	preempt_disable();
+-	printk("After preempt_disable..\n");
+ 	if (WARN(!irqs_disabled(),
+ 		 "Interrupts were enabled *very* early, fixing it\n"))
+ 		local_irq_disable();
+@@ -602,9 +601,7 @@ asmlinkage __visible void __init start_kernel(void)
+ 	call_function_init();
+ 	WARN(!irqs_disabled(), "Interrupts were enabled early\n");
+ 	early_boot_irqs_disabled = false;
+-	printk("Before local_irq_enable..\n");
+ 	local_irq_enable();
+-	printk("After local_irq_enable..\n");
+ 
+ 	kmem_cache_init_late();
+ 
+diff --git a/kernel/irq/chip.c b/kernel/irq/chip.c
+index d11c46a..6dd902d 100644
+--- a/kernel/irq/chip.c
++++ b/kernel/irq/chip.c
+@@ -768,9 +768,16 @@ void handle_percpu_devid_irq(unsigned int irq, struct irq_desc *desc)
+ {
+ 	struct irq_chip *chip = irq_desc_get_chip(desc);
+ 	struct irqaction *action = desc->action;
+-	void *dev_id = raw_cpu_ptr(action->percpu_dev_id);
++	void *dev_id = NULL;
+ 	irqreturn_t res;
+ 
++	if (!action) {
++		printk("------ hw_irq is %d.. ------\n", desc->irq_data.hwirq);
++//		return;
++	}
++
++	dev_id = raw_cpu_ptr(action->percpu_dev_id);
++
+ 	kstat_incr_irqs_this_cpu(irq, desc);
+ 
+ 	if (chip->irq_ack)
+diff --git a/kernel/kexec.c b/kernel/kexec.c
+index 0364fb5..bf6a7fe 100644
+--- a/kernel/kexec.c
++++ b/kernel/kexec.c
+@@ -36,6 +36,7 @@
+ #include <linux/syscore_ops.h>
+ #include <linux/compiler.h>
+ #include <linux/hugetlb.h>
++#include <linux/delay.h>
+ 
+ #include <asm/page.h>
+ #include <asm/uaccess.h>
+@@ -777,6 +778,7 @@ static struct page *kimage_alloc_crash_control_pages(struct kimage *image,
+ 	size = (1 << order) << PAGE_SHIFT;
+ 	hole_start = (image->control_page + (size - 1)) & ~(size - 1);
+ 	hole_end   = hole_start + size - 1;
++
+ 	while (hole_end <= crashk_res.end) {
+ 		unsigned long i;
+ 
+@@ -843,7 +845,8 @@ static int kimage_add_entry(struct kimage *image, kimage_entry_t entry)
+ 		image->entry = ind_page;
+ 		image->last_entry = ind_page +
+ 				      ((PAGE_SIZE/sizeof(kimage_entry_t)) - 1);
+-		if (dump_list) printk("  I: %010lx (%p)\n", (unsigned long)virt_to_phys(ind_page), ind_page);
++		if (dump_list) 
++			printk("  I: %010lx (%p)\n", (unsigned long)virt_to_phys(ind_page), ind_page);
+ 	}
+ 	*image->entry = entry;
+ 	image->entry++;
+@@ -1150,7 +1153,13 @@ static int kimage_load_crash_segment(struct kimage *image,
+ 	int result;
+ 	unsigned char __user *buf = NULL;
+ 	unsigned char *kbuf = NULL;
+-
++#if 0
++	unsigned char *testptr = NULL;
++	void *vaddr = NULL;
++	unsigned long *maddr_tmp = NULL;
++	int i;
++	char buf1[21];
++#endif
+ 	result = 0;
+ 	if (image->file_mode)
+ 		kbuf = segment->kbuf;
+@@ -1159,6 +1168,31 @@ static int kimage_load_crash_segment(struct kimage *image,
+ 	ubytes = segment->bufsz;
+ 	mbytes = segment->memsz;
+ 	maddr = segment->mem;
++	//printk("\n------------- madddr=%lx -------------\n", maddr);
++
++#if 0
++	if (maddr == 0x2080000) {
++
++		vaddr = ioremap_cache(maddr, PAGE_SIZE);
++		if (!vaddr) {
++			printk("ioremap failed for Physical address:%lx \n", maddr);
++		}
++		testptr = (unsigned char *)vaddr;
++		for (i=0; i < 20; i++)
++			printk("\n--- byte is %x ---\n", *(unsigned char *)(testptr + i));
++	}
++
++	iounmap(vaddr);
++	if (maddr == 0x2080000) {
++		maddr_tmp = maddr;
++		result = copy_from_user(&buf1[0], buf, 20);
++		testptr = &buf1[0];
++                for (i=0; i < 20; i++)
++                        printk("\n--- byte read from user is %x ---\n", *(unsigned char *)(testptr + i));
++		
++	}
++#endif
++
+ 	while (mbytes) {
+ 		struct page *page;
+ 		char *ptr;
+@@ -1198,6 +1232,19 @@ static int kimage_load_crash_segment(struct kimage *image,
+ 			buf += mchunk;
+ 		mbytes -= mchunk;
+ 	}
++#if 0
++	if (maddr_tmp == 0x2080000) {
++		vaddr = ioremap_cache(maddr_tmp, PAGE_SIZE);
++		if (!vaddr) {
++			printk("ioremap failed for Physical address:%lx \n", maddr_tmp);
++		}
++		testptr = (unsigned char *)vaddr;
++		printk("\n ------_Start of Second read --------------\n");
++		for (i=0; i < 20; i++)
++			printk("\n--- byte copied is %x -----\n", *(unsigned char *)(testptr + i));
++		iounmap(vaddr);
++	}	
++#endif
+ out:
+ 	return result;
+ }
+@@ -1249,6 +1296,9 @@ SYSCALL_DEFINE4(kexec_load, unsigned long, entry, unsigned long, nr_segments,
+ 		struct kexec_segment __user *, segments, unsigned long, flags)
+ {
+ 	struct kimage **dest_image, *image;
++	unsigned long tstart = 0;
++	unsigned long tend = 0;
++	unsigned long usecs = 0;
+ 	int result;
+ 
+ 	/* We only trust the superuser with rebooting the system. */
+@@ -1317,7 +1367,27 @@ SYSCALL_DEFINE4(kexec_load, unsigned long, entry, unsigned long, nr_segments,
+ 			goto out;
+ 
+ 		for (i = 0; i < nr_segments; i++) {
++#if 0
++			if (i ==2)
++				tstart = jiffies;
++			if (i == 2) {
++				unsigned long timeout = 0;
++				printk("\n---Skip initrd segment: size=0x%x -----\n", image->segment[i].memsz);
++				timeout = 20000;
++				while (timeout--)
++					udelay(1);
++				printk("\n ------ Wait Over ---- \n");
++				continue;
++			}
++#endif
+ 			result = kimage_load_segment(image, &image->segment[i]);
++#if 0
++			if (i ==2) {
++                                tend = jiffies;
++				usecs = jiffies_to_usecs(tend - tstart);
++				printk("\n--- Time taken to copy is %d usecs ----\n", usecs);	
++			}	
++#endif
+ 			if (result)
+ 				goto out;
+ 		}
+-- 
+1.9.1
+
