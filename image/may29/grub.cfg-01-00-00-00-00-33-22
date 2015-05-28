@@ -1,0 +1,7 @@
+set timeout=5
+set default=kdump_dbg_nfs
+menuentry "kdump_dbg_nfs" --id kdump_dbg_nfs {
+        set root=(tftp,192.168.2.202)
+        linux /anurup/Image rdinit=/init crashkernel=256M@32M console=ttyS0,115200 earlycon=uart8250,mmio32,0x80300000 root=/dev/nfs rw nfsroot=192.168.2.202:/var/lib/tftpboot/anurup/kdump_rfs ip=192.168.2.207:192.168.2.202:192.168.2.202:255.255.255.0::eth0:dhcp
+       devicetree /anurup/hip05-d02.dtb
+}
