@@ -1,0 +1,254 @@
+From 2c605ac1c32c38b094d9f74c8a3740786d04eee7 Mon Sep 17 00:00:00 2001
+From: Anurup M <anurup.m@huawei.com>
+Date: Mon, 27 Apr 2015 17:23:49 +0530
+Subject: [PATCH 2/3] kexec arm64 - changes exp2
+
+---
+ arch/arm64/include/asm/efi.h        |  6 +++---
+ arch/arm64/include/asm/processor.h  |  4 ++++
+ arch/arm64/include/asm/smp.h        |  2 +-
+ arch/arm64/include/asm/virt.h       | 10 ++++++----
+ arch/arm64/kernel/efi.c             | 14 +++++++++-----
+ arch/arm64/kernel/process.c         |  2 ++
+ arch/arm64/kernel/relocate_kernel.S |  8 +++++++-
+ arch/arm64/kernel/setup.c           |  3 ++-
+ arch/arm64/kernel/smp.c             |  2 +-
+ 9 files changed, 35 insertions(+), 16 deletions(-)
+
+diff --git a/arch/arm64/include/asm/efi.h b/arch/arm64/include/asm/efi.h
+index 9c22d0a..7baf2cc 100644
+--- a/arch/arm64/include/asm/efi.h
++++ b/arch/arm64/include/asm/efi.h
+@@ -6,10 +6,10 @@
+ 
+ #ifdef CONFIG_EFI
+ extern void efi_init(void);
+-//extern void efi_virtmap_init(void);
++extern void efi_virtmap_init(void);
+ #else
+ #define efi_init()
+-//#define efi_virtmap_init()
++#define efi_virtmap_init()
+ #endif
+ 
+ #define efi_call_virt(f, ...)						\
+@@ -69,7 +69,7 @@ extern void efi_init(void);
+  *   non-early mapping of the UEFI system table, and we need to have the virtmap
+  *   installed.
+  */
+-//#define EFI_VIRTMAP		EFI_ARCH_1
++#define EFI_VIRTMAP		EFI_ARCH_1
+ 
+ void efi_virtmap_load(void);
+ void efi_virtmap_unload(void);
+diff --git a/arch/arm64/include/asm/processor.h b/arch/arm64/include/asm/processor.h
+index 641ed9a..b87deb9 100644
+--- a/arch/arm64/include/asm/processor.h
++++ b/arch/arm64/include/asm/processor.h
+@@ -141,10 +141,14 @@ extern void release_thread(struct task_struct *);
+ 
+ unsigned long get_wchan(struct task_struct *p);
+ 
++#if 0
+ static inline void cpu_relax(void)
+ {
+ 	asm volatile("yield" ::: "memory");
+ }
++#endif
++
++#define cpu_relax()	barrier();
+ 
+ #define cpu_relax_lowlatency()                cpu_relax()
+ 
+diff --git a/arch/arm64/include/asm/smp.h b/arch/arm64/include/asm/smp.h
+index 780f82c..fb102e7 100644
+--- a/arch/arm64/include/asm/smp.h
++++ b/arch/arm64/include/asm/smp.h
+@@ -41,7 +41,7 @@ extern void handle_IPI(int ipinr, struct pt_regs *regs);
+ /*
+  * Setup the set of possible CPUs (via set_cpu_possible)
+  */
+-extern void smp_init_cpus(void);
++extern void of_smp_init_cpus(void);
+ 
+ /*
+  * Provide a function to raise an IPI cross call on CPUs in callmap.
+diff --git a/arch/arm64/include/asm/virt.h b/arch/arm64/include/asm/virt.h
+index 3497cf9..affea53 100644
+--- a/arch/arm64/include/asm/virt.h
++++ b/arch/arm64/include/asm/virt.h
+@@ -29,7 +29,7 @@
+  * HVC_CALL_HYP - Execute a hyp routine.
+  */
+ 
+-#define HVC_CALL_HYP 0
++#define HVC_CALL_HYP 3
+ 
+ /*
+  * HVC_GET_VECTORS - Return the value of the vbar_el2 register.
+@@ -56,7 +56,7 @@
+  * The called function must preserve the contents of register x18.
+  */
+ 
+-#define HVC_CALL_FUNC 3
++#define HVC_CALL_FUNC 4
+ 
+ /*
+  * HVC_KVM_CPU_SHUTDOWN - Shutdown KVM on the calling CPU.
+@@ -64,12 +64,12 @@
+  * @x0: The logical ID of the CPU.
+  */
+ 
+-#define HVC_KVM_CPU_SHUTDOWN 4
++//#define HVC_KVM_CPU_SHUTDOWN 4
+ #define BOOT_CPU_MODE_EL1	(0xe11)
+ #define BOOT_CPU_MODE_EL2	(0xe12)
+ 
+ #ifndef __ASSEMBLY__
+-
++#if 0
+ #include <linux/stringify.h>
+ #include <asm/compiler.h>
+ 
+@@ -85,6 +85,8 @@ static inline void kvm_cpu_shutdown_2(int cpu)
+ 		: "+r" (cpu));
+ }
+ 
++#endif
++
+ /*
+  * __boot_cpu_mode records what mode CPUs were booted in.
+  * A correctly-implemented bootloader must start all CPUs in the same mode:
+diff --git a/arch/arm64/kernel/efi.c b/arch/arm64/kernel/efi.c
+index 2b8d701..1e120b25c 100644
+--- a/arch/arm64/kernel/efi.c
++++ b/arch/arm64/kernel/efi.c
+@@ -226,13 +226,15 @@ void __init efi_init(void)
+ 		return;
+ 
+ 	reserve_regions();
+-	early_memunmap(memmap.map, params.mmap_size);
+ }
+ 
+-static bool __init efi_virtmap_init(void)
++void __init efi_virtmap_init(void)
+ {
+ 	efi_memory_desc_t *md;
+ 
++	if (!efi_enabled(EFI_BOOT))
++		return;
++
+ 	for_each_efi_memory_desc(&memmap, md) {
+ 		u64 paddr, npages, size;
+ 		pgprot_t prot;
+@@ -240,7 +242,7 @@ static bool __init efi_virtmap_init(void)
+ 		if (!(md->attribute & EFI_MEMORY_RUNTIME))
+ 			continue;
+ 		if (md->virt_addr == 0)
+-			return false;
++			return;
+ 
+ 		paddr = md->phys_addr;
+ 		npages = md->num_pages;
+@@ -264,7 +266,9 @@ static bool __init efi_virtmap_init(void)
+ 
+ 		create_pgd_mapping(&efi_mm, paddr, md->virt_addr, size, prot);
+ 	}
+-	return true;
++	set_bit(EFI_VIRTMAP, &efi.flags);
++	early_memunmap(memmap.map, memmap.map_end - memmap.map);
++//	return true;
+ }
+ 
+ /*
+@@ -306,7 +310,7 @@ static int __init arm64_enable_runtime_services(void)
+ 	}
+ 	set_bit(EFI_SYSTEM_TABLES, &efi.flags);
+ 
+-	if (!efi_virtmap_init()) {
++	if (!efi_enabled(EFI_VIRTMAP)) {
+ 		pr_err("No UEFI virtual mapping was installed -- runtime services will not be available\n");
+ 		return -1;
+ 	}
+diff --git a/arch/arm64/kernel/process.c b/arch/arm64/kernel/process.c
+index 24ac695..49282fd 100644
+--- a/arch/arm64/kernel/process.c
++++ b/arch/arm64/kernel/process.c
+@@ -170,12 +170,14 @@ void machine_restart(char *cmd)
+ 	local_irq_disable();
+ 	smp_send_stop();
+ 
++#if 0
+ 	/*
+ 	 * UpdateCapsule() depends on the system being reset via
+ 	 * ResetSystem().
+ 	 */
+ 	if (efi_enabled(EFI_RUNTIME_SERVICES))
+ 		efi_reboot(reboot_mode, NULL);
++#endif
+ 
+ 	/* Now call the architecture specific reboot code. */
+ 	if (arm_pm_restart)
+diff --git a/arch/arm64/kernel/relocate_kernel.S b/arch/arm64/kernel/relocate_kernel.S
+index 4bb69dd..991df4b 100644
+--- a/arch/arm64/kernel/relocate_kernel.S
++++ b/arch/arm64/kernel/relocate_kernel.S
+@@ -111,7 +111,7 @@ relocate_new_kernel:
+ 
+ 	/* Start new image. */
+ 	ldr	x4, arm64_kexec_kimage_start
+-	mov	x0, xzr
++	ldr	x0, arm64_kexec_dtb_addr
+ 	mov	x1, xzr
+ 	mov	x2, xzr
+ 	mov	x3, xzr
+@@ -130,6 +130,12 @@ arm64_kexec_kimage_start:
+ 	.quad	0x0
+ 
+ /*
++ * arm64_kexec_dtb_addr - Physical address of device tree.
++*/
++arm64_kexec_dtb_addr:
++	.quad	0x0
++
++/*
+  * arm64_kexec_kimage_head - Copy of image->head, the list of kimage entries.
+  */
+ .globl arm64_kexec_kimage_head
+diff --git a/arch/arm64/kernel/setup.c b/arch/arm64/kernel/setup.c
+index 815c444..d0348a4 100644
+--- a/arch/arm64/kernel/setup.c
++++ b/arch/arm64/kernel/setup.c
+@@ -474,6 +474,7 @@ void __init setup_arch(char **cmdline_p)
+ 	/* kexec-tool will detect the region with /proc/iomem */
+ 	insert_resource(&iomem_resource, &crashk_res);
+ #endif
++	efi_virtmap_init();
+ 	early_ioremap_reset();
+ 
+ 	if (acpi_disabled) {
+@@ -481,7 +482,7 @@ void __init setup_arch(char **cmdline_p)
+ 		psci_dt_init();
+ 		cpu_read_bootcpu_ops();
+ #ifdef CONFIG_SMP
+-		smp_init_cpus();
++		of_smp_init_cpus();
+ #endif
+ 	} else {
+ 		psci_acpi_init();
+diff --git a/arch/arm64/kernel/smp.c b/arch/arm64/kernel/smp.c
+index 5b85e51..2fb8200 100644
+--- a/arch/arm64/kernel/smp.c
++++ b/arch/arm64/kernel/smp.c
+@@ -325,7 +325,7 @@ void __init smp_prepare_boot_cpu(void)
+  * cpu logical map array containing MPIDR values related to logical
+  * cpus. Assumes that cpu_logical_map(0) has already been initialized.
+  */
+-void __init smp_init_cpus(void)
++void __init of_smp_init_cpus(void)
+ {
+ 	struct device_node *dn = NULL;
+ 	unsigned int i, cpu = 1;
+-- 
+1.9.1
+
